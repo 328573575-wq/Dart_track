@@ -1,0 +1,3 @@
+# 将海康 MVS SDK 运行时库目录加入 LD_LIBRARY_PATH，
+# 使 libros_camera_component.so 加载时能解析到 libMvCameraControl.so
+prepend-non-duplicate;LD_LIBRARY_PATH;/opt/MVS/lib/64

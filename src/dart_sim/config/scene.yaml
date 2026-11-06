@@ -1,0 +1,55 @@
+# Synthetic scene for the dart measurement project.
+#
+# Frames
+#   launch/world: origin at the launcher, +y = horizontal launch direction,
+#                 +z = up, +x = right.  The dart flies in the x = 0 plane.
+#   camera:       OpenCV optical frame, from the eye/target/up look-at pose.
+#
+# Everything here is in metres / pixels / seconds.
+
+frame:
+  width: 640
+  height: 480
+  fps: 60.0
+
+camera:
+  fx: 460.0
+  fy: 460.0
+  cx: 320.0
+  cy: 240.0
+  # k1, k2, p1, p2, k3  (zero = ideal pinhole; set real values later)
+  distortion: [0.0, 0.0, 0.0, 0.0, 0.0]
+  eye: [-3.8, 1.9, 1.8]
+  target: [0.0, 2.2, 0.7]
+  up: [0.0, 0.0, 1.0]
+
+lights:
+  # rectangle corners on the ground (z = 0); 1.0 m x 1.5 m
+  points:
+    - [-0.5, 2.0, 0.0]
+    - [ 0.5, 2.0, 0.0]
+    - [-0.5, 3.5, 0.0]
+    - [ 0.5, 3.5, 0.0]
+  radius: 0.06
+
+dart:
+  origin: [0.0, 0.0, 0.6]
+  speed: 6.0
+  elevation_deg: 35.0
+  gravity: 9.81
+  strip_length: 0.15
+  strip_width: 0.02
+
+render:
+  background: 18.0
+  noise_sigma: 2.5
+  light_gain: 255.0
+  dart_gain: 255.0
+  # RGB 0..1. Green guide lights + warm-white dart strip, so the HSV
+  # thresholds in recognition_node.cpp actually see them.
+  light_color: [0.15, 1.0, 0.32]
+  dart_color: [1.0, 0.95, 0.85]
+  exposure_frac: 0.5
+  motion_blur_samples: 5
+  clutter: 6
+  seed: 7

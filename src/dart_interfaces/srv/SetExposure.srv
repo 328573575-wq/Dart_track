@@ -1,0 +1,5 @@
+float64 exposure_us
+---
+bool success
+float64 applied_exposure_us
+string message

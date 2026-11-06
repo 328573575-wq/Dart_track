@@ -1,0 +1,24 @@
+/**:
+  ros__parameters:
+    # 引导灯 HSV 阈值
+    light_h_lo: 40
+    light_h_hi: 85
+    light_s_lo: 50
+    light_s_hi: 255
+    light_v_lo: 50
+    light_v_hi: 255
+
+    # 飞镖灯条 HSV 阈值
+    dart_h_lo: 40
+    dart_h_hi: 85
+    dart_s_lo: 80
+    dart_s_hi: 255
+    dart_v_lo: 100
+    dart_v_hi: 255
+
+    # 最小面积
+    light_min_area: 30.0
+    dart_min_area: 60.0
+
+    # 灯条长宽比
+    length_width_ratio: 1.8

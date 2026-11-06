@@ -1,0 +1,9 @@
+build/
+install/
+log/
+runs/
+__pycache__/
+*.pyc
+
+# ---- 本仓库额外忽略 ----
+.vscode/

@@ -1,0 +1,82 @@
+# 统一配置文件：节点参数统一从这里加载（params_control/params_control.hpp）。
+# launch 文件保留 use_camera、camera_type、use_video、enable_serial、debug_frame 和 record_dir 启动参数。
+
+recognition_package:
+  min_green_value: 100
+  min_green_excess: 50
+  min_area: 50
+  min_circularity: 0.6
+
+  init_last_tar_center_x: 475
+  init_last_tar_center_y: 1365
+  init_track_result_x: 400
+
+  track_tar_roi_w: 200
+  track_tar_roi_h: 100
+
+  search_tar_roi_w: 400
+  search_tar_roi_h: 400
+  debug_frame_fps: 30   # 调试压缩图像发布帧率，0 表示关闭
+
+dart_tracker:
+  motion_difference_threshold: 25
+
+  track_tar_roi_w: 200
+  track_tar_roi_h: 300
+
+  search_tar_roi_w: 800
+  search_tar_roi_h: 300
+
+  debug_frame_fps: 30   # 调试压缩图像发布帧率，0 表示关闭
+
+  min_red_value: 100
+  min_red_excess: 50
+
+  min_blue_value: 100
+  min_blue_excess: 50
+
+  finish_pix_above: 400
+
+  init_last_tar_center_x: 600
+  init_last_tar_center_y: 100
+
+  max_track_lost_cnt: 5
+
+  min_area: 10
+
+camera_mode:
+  recognition_exposure_time: 8000.0  # 识别模式曝光时间 (us)
+  track_exposure_time: 8000.0         # 跟踪模式曝光时间 (us)
+  track_timeout_sec: 5.0             # 跟踪最长持续时间 (s)
+ 
+iray_camera:
+  frame_id: iray_camera
+  fps: 120
+  gain: 16.0
+  gamma: 1.0
+  jpeg_quality: 80     # 压缩话题 JPEG 质量 (1-100)
+  compressed_fps: 30   # /camera/compressed 发布帧率，0 表示关闭
+
+video_test:
+  video_path: others/video/test.mp4
+  frame_id: video_test
+  fps: 120
+  loop: true
+
+serial_bridge:
+  serial_port: /dev/ttyACM0
+  baud_rate: 115200
+  timeout_ms: 1000
+  target_cmd: 1
+  state_cmd: 6
+
+hk_camera:
+  width: 1440          # 图像宽度
+  height: 1080         # 图像高度
+  fps: 30.0           # 采集帧率（调试期 30 帧够用，曝光上限也随之放宽到 33ms）
+  gain: 0.0           # 增益 (dB)，量程 0~17
+  camera_acsn: ""      # 相机序列号，留空则使用枚举到的第一台
+  balance_white_auto: 0  # 白平衡自动模式：0=关闭(固定)，1=连续，2=一次
+  frame_id: hk_camera
+  jpeg_quality: 80     # 压缩话题 JPEG 质量 (1-100)
+  compressed_fps: 0    # /camera/compressed 发布帧率，0 表示关闭（调试期关掉：JPEG 编码在取流线程里同步跑，会拖慢采集）
