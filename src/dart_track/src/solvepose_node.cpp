@@ -4,6 +4,8 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <vector>
+#include <ament_index_cpp/get_package_share_directory.hpp>
+#include <filesystem>
 
 #include <std_msgs/msg/header.hpp>
 #include <geometry_msgs/msg/point.hpp>
@@ -40,6 +42,38 @@ namespace dart_track
         }
         //实例化动态TF广播器
         broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(this);
+
+        //读取相机内参yaml
+        std::string camera_path;
+        try 
+        {
+            std::string pkg_share = ament_index_cpp::get_package_share_directory("dart_track");
+            camera_path = pkg_share + "/config/ost.yaml";
+        } 
+        catch (const std::exception & e) 
+        {
+            RCLCPP_ERROR(get_logger(), "找不到包: %s", e.what());
+            return;
+        }
+
+        cv::FileStorage fs(camera_path, cv::FileStorage::READ);
+        if (!fs.isOpened()) 
+        {
+            RCLCPP_ERROR(get_logger(), "无法打开: %s", camera_path.c_str());
+            return;
+        }
+
+        if (!fs["camera_matrix"].empty()) 
+        {
+            fs["camera_matrix"] >> camera_matrix_;
+        } 
+        else RCLCPP_ERROR(get_logger(), "缺少 camera_matrix");
+
+        if (!fs["distortion_coefficients"].empty()) 
+        {
+            fs["distortion_coefficients"] >> dist_coeffs_;
+        } 
+        else RCLCPP_ERROR(get_logger(), "缺少 dist_coeffs");
     }
 
     void SolvePoseNode::solve_pose_callback(

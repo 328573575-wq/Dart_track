@@ -16,6 +16,12 @@ namespace dart_track
         rclcpp::Publisher<Detections>::SharedPtr detections_pub_;
 
         cv::Point2d dart_last_center_ = cv::Point2d(-1.0, -1.0);
+        // 灯条是刚体，相邻两帧的"尾->头"方向不会突然转 180°。
+        // 用上一帧的方向先把头尾定下来，比只看运动方向稳得多。
+        cv::Point2d dart_last_axis_ = cv::Point2d(0.0, 0.0);
+        bool dart_has_last_center_ = false;
+        bool dart_has_last_axis_ = false;
+        int dart_miss_count_ = 0;   // 连续没找到灯条的帧数
         // ========================参数设置===========================
         // 引导灯HSV阈值
         int LIGHT_H_LO = 40, LIGHT_H_HI = 85;

@@ -21,17 +21,19 @@ from __future__ import annotations
 import array
 import json
 import os
+import threading
 import time
 from datetime import datetime
 
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PointStamped, PoseStamped, Vector3Stamped
 from sensor_msgs.msg import CameraInfo, Image
-from std_msgs.msg import Float64MultiArray, String
+from std_msgs.msg import Float64, Float64MultiArray, String
 
 from dart_sim.render import render_frame, write_png
 from dart_sim.scene import Scene, jsonable, rotation_to_quaternion
@@ -44,6 +46,10 @@ class SimWorld(Node):
         default_scene = os.path.join(
             get_package_share_directory('dart_sim'), 'config', 'scene.yaml')
         self.declare_parameter('scene_file', default_scene)
+        self.declare_parameter('lights_file', os.path.join(
+            get_package_share_directory('dart_sim'), 'config', 'real_light_centers.yaml'))
+        self.declare_parameter('camera_file', os.path.join(
+            get_package_share_directory('dart_sim'), 'config', 'ost.yaml'))
         self.declare_parameter('save', False)
         self.declare_parameter('save_dir', '')
         self.declare_parameter('time_scale', 1.0)
@@ -51,9 +57,17 @@ class SimWorld(Node):
         self.declare_parameter('draw_truth', False)
         self.declare_parameter('debug_rate', False)
         self.declare_parameter('exit_when_done', False)
+        # 集成开关：sim_world 自己把显示窗口和打分节点也拉起来，
+        # 这样上层 launch 只需要 use_sim:=true，不用再关心 viewer/eval。
+        self.declare_parameter('viewer', True)
+        self.declare_parameter('show_truth', True)
+        self.declare_parameter('eval', True)
 
         scene_file = str(self.get_parameter('scene_file').value)
-        self.scene = Scene.from_yaml(scene_file)
+        lights_file = str(self.get_parameter('lights_file').value)
+        camera_file = str(self.get_parameter('camera_file').value)
+        self.scene = Scene.from_yaml(scene_file, lights_file=lights_file,
+                                     camera_file=camera_file)
         self.time_scale = max(1e-3, float(self.get_parameter('time_scale').value))
         self.loop = bool(self.get_parameter('loop').value)
         self.draw_truth = bool(self.get_parameter('draw_truth').value)
@@ -66,7 +80,9 @@ class SimWorld(Node):
         self._exit_timer = None
         self._last_perf = None
 
-        self.pub_image = self.create_publisher(Image, '/camera/image_raw', 10)
+        # 和真实相机一致：图像用 SensorDataQoS（best effort, depth 5）。
+        # 用 reliable + depth 10 时，大图在 loopback 上丢包会触发重传，反而把发布端拖死。
+        self.pub_image = self.create_publisher(Image, '/camera/image_raw', qos_profile_sensor_data)
         self.pub_info = self.create_publisher(CameraInfo, '/camera/camera_info', 10)
         self.pub_dart = self.create_publisher(PointStamped, '/sim/truth/dart', 10)
         self.pub_velocity = self.create_publisher(Vector3Stamped, '/sim/truth/dart_velocity', 10)
@@ -74,7 +90,17 @@ class SimWorld(Node):
         self.pub_camera_pose = self.create_publisher(PoseStamped, '/sim/truth/camera_pose', 10)
         self.pub_light_pixels = self.create_publisher(Float64MultiArray, '/sim/truth/light_pixels', 10)
         self.pub_light_points = self.create_publisher(Float64MultiArray, '/sim/truth/light_points', 10)
+        # 飞镖灯条的两个端点在发射系（throw）下的真值，和你 position_node 输出的
+        # dart_real_front / dart_real_back 一一对应，可以直接比。
+        self.pub_dart_front = self.create_publisher(PointStamped, '/sim/truth/dart_front', 10)
+        self.pub_dart_back = self.create_publisher(PointStamped, '/sim/truth/dart_back', 10)
+        # 速度方向与 +y 轴的夹角（度）。飞镖在 x=0 平面内飞，所以这就是发射仰角。
+        self.pub_dart_angle = self.create_publisher(Float64, '/sim/truth/dart_angle_deg', 10)
         self.pub_status = self.create_publisher(String, '/sim/status', 10)
+
+        self.viewer_enabled = bool(self.get_parameter('viewer').value)
+        self.show_truth = bool(self.get_parameter('show_truth').value)
+        self.eval_enabled = bool(self.get_parameter('eval').value)
 
         self.save = bool(self.get_parameter('save').value)
         self.out_dir = None
@@ -142,7 +168,7 @@ class SimWorld(Node):
     def _publish_image(self, rgb, stamp):
         message = Image()
         message.header.stamp = stamp
-        message.header.frame_id = 'camera_optical'
+        message.header.frame_id = 'camera'
         message.height = int(rgb.shape[0])
         message.width = int(rgb.shape[1])
         message.encoding = 'bgr8'
@@ -158,7 +184,7 @@ class SimWorld(Node):
         camera = self.scene.camera
         message = CameraInfo()
         message.header.stamp = stamp
-        message.header.frame_id = 'camera_optical'
+        message.header.frame_id = 'camera'
         message.width = int(camera.width)
         message.height = int(camera.height)
         message.distortion_model = 'plumb_bob'
@@ -186,6 +212,9 @@ class SimWorld(Node):
             'dart_px': uv_dart[0],
             'dart_depth': float(depth_dart[0]),
             'dart_valid': bool(valid_dart[0]),
+            'strip_front': nose,
+            'strip_back': tail,
+            'angle_deg': float(np.degrees(np.arctan2(velocity[2], velocity[1]))),
             'strip_tail_px': uv_tail[0],
             'strip_nose_px': uv_nose[0],
             'light_px': uv_lights,
@@ -194,22 +223,38 @@ class SimWorld(Node):
         }
 
     def _publish_truth(self, truth, stamp):
+        front = PointStamped()
+        front.header.stamp = stamp
+        front.header.frame_id = 'throw'
+        front.point.x, front.point.y, front.point.z = [
+            float(v) for v in truth['strip_front']]
+        self.pub_dart_front.publish(front)
+
+        back = PointStamped()
+        back.header.stamp = stamp
+        back.header.frame_id = 'throw'
+        back.point.x, back.point.y, back.point.z = [
+            float(v) for v in truth['strip_back']]
+        self.pub_dart_back.publish(back)
+
+        self.pub_dart_angle.publish(Float64(data=float(truth['angle_deg'])))
+
         dart = PointStamped()
         dart.header.stamp = stamp
-        dart.header.frame_id = 'launch'
+        dart.header.frame_id = 'throw'
         dart.point.x, dart.point.y, dart.point.z = [float(v) for v in truth['dart']]
         self.pub_dart.publish(dart)
 
         velocity = Vector3Stamped()
         velocity.header.stamp = stamp
-        velocity.header.frame_id = 'launch'
+        velocity.header.frame_id = 'throw'
         velocity.vector.x, velocity.vector.y, velocity.vector.z = [
             float(v) for v in truth['velocity']]
         self.pub_velocity.publish(velocity)
 
         pixel = PointStamped()
         pixel.header.stamp = stamp
-        pixel.header.frame_id = 'camera_optical'
+        pixel.header.frame_id = 'camera'
         pixel.point.x = float(truth['dart_px'][0])
         pixel.point.y = float(truth['dart_px'][1])
         pixel.point.z = float(truth['dart_depth'])
@@ -218,7 +263,7 @@ class SimWorld(Node):
         camera = self.scene.camera
         pose = PoseStamped()
         pose.header.stamp = stamp
-        pose.header.frame_id = 'launch'
+        pose.header.frame_id = 'throw'
         pose.pose.position.x, pose.pose.position.y, pose.pose.position.z = [
             float(v) for v in camera.C]
         qx, qy, qz, qw = rotation_to_quaternion(camera.R_wc)
@@ -280,6 +325,9 @@ class SimWorld(Node):
             'dart_px': truth['dart_px'],
             'dart_depth': truth['dart_depth'],
             'dart_valid': truth['dart_valid'],
+            'strip_front': truth['strip_front'],
+            'strip_back': truth['strip_back'],
+            'angle_deg': truth['angle_deg'],
             'strip_tail_px': truth['strip_tail_px'],
             'strip_nose_px': truth['strip_nose_px'],
             'light_px': truth['light_px'],
@@ -314,14 +362,55 @@ class SimWorld(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = SimWorld()
+    world = SimWorld()
+
+    # 显示窗口和打分节点都在本进程内，各自跑一个单线程执行器：
+    # 这样 OpenCV 的窗口永远只在同一个线程里碰，不会因为执行器换线程而卡死。
+    extras = []  # [(node, executor)]
+
+    def add_extra(factory):
+        try:
+            node = factory()
+        except Exception as exc:  # noqa: BLE001 - 可选功能失败不该拖垮仿真
+            world.get_logger().warn(f'可选节点启动失败（已跳过）: {exc}')
+            return None
+        executor = rclpy.executors.SingleThreadedExecutor()
+        executor.add_node(node)
+        threading.Thread(target=executor.spin, daemon=True).start()
+        extras.append((node, executor))
+        return node
+
+    viewer = None
+    if world.viewer_enabled:
+        try:
+            from dart_sim.sim_viewer import SimViewer
+        except ImportError as exc:
+            world.get_logger().warn(f'sim_viewer 不可用（已跳过）: {exc}')
+        else:
+            viewer = add_extra(lambda: SimViewer(show_truth=world.show_truth))
+
+    if world.eval_enabled:
+        from dart_sim import sim_eval as sim_eval_module
+        if sim_eval_module.HAVE_DART_POINT:
+            add_extra(lambda: sim_eval_module.SimEval(report_period=1.0))
+        else:
+            world.get_logger().warn(
+                'sim_eval 跳过：环境里没有 dart_point_interfaces（先 source 你的工作空间）')
+
     try:
-        while rclpy.ok() and not node.requested_exit:
-            rclpy.spin_once(node, timeout_sec=0.1)
+        while rclpy.ok() and not world.requested_exit:
+            if viewer is not None and getattr(viewer, 'requested_exit', False):
+                world.get_logger().info('viewer 退出，仿真一起停')
+                break
+            rclpy.spin_once(world, timeout_sec=0.05)
     except KeyboardInterrupt:
         pass
     finally:
-        node.destroy_node()
+        for _, executor in extras:
+            executor.shutdown()
+        for node, _ in extras:
+            node.destroy_node()
+        world.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
 

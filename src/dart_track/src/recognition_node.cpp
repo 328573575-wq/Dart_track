@@ -1,5 +1,8 @@
 #include "dart_track/recognition_node.hpp"
 
+#include <algorithm>
+#include <utility>
+
 #include <opencv2/opencv.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
@@ -131,6 +134,7 @@ namespace dart_track
 
         cv::Point2f vertexs[4];
         double best_area = 0.0;    // 多个候选时挑面积最大的
+        bool dart_found = false;   // 这一帧到底有没有找到灯条
 
         for (const auto & c : dart_contours) {
             const double area = cv::contourArea(c);
@@ -144,8 +148,25 @@ namespace dart_track
             if (area > best_area) {  // 只有“目前最大的”才写进 vertexs
                 best_area = area;
                 rr.points(vertexs);
+                dart_found = true;
             }
         }
+
+        // 这一帧没有灯条：不要拿没初始化的 vertexs 去算坐标。
+        // 仍然发布消息（引导灯还有用，solvepose 靠它算 TF），
+        // 但把镖头/镖尾标成 (0,0) 表示"本帧无效"，下游看到这个值会跳过。
+        if (!dart_found) {
+            ++dart_miss_count_;
+            if (dart_miss_count_ >= 10) {
+                // 丢太久就别拿很久以前的位置当参考了
+                dart_has_last_center_ = false;
+                dart_has_last_axis_ = false;
+            }
+            cv::Point2d invalid(0.0, 0.0);
+            detections_publish(img_msg->header, light_centers, invalid, invalid);
+            return;
+        }
+        dart_miss_count_ = 0;
 
         double dis_1 = cv::norm(vertexs[0] - vertexs[1]);
         double dis_2 = cv::norm(vertexs[1] - vertexs[2]);
@@ -160,27 +181,55 @@ namespace dart_track
             back_mid = (vertexs[3] + vertexs[0]) / 2.0f;
         }
 
-        // 分配一下镖头镖尾
+        // 分配一下镖头镖尾。
+        // 第一步：先和上一帧的朝向对齐（刚体不会一帧转 180°）。
         const cv::Point2d center = (front_mid + back_mid) / 2.0;
-        cv::Point2d last_center = dart_last_center_;
-        dart_last_center_ = center;
+        cv::Point2d axis = front_mid - back_mid;   // 当前帧 尾->头 向量
+        double axis_len = cv::norm(axis);
 
+        // 目标"瞬移"（仿真一次飞行结束回到起点、或丢失后重新捕获）：
+        // 两帧之间不可能真的移动这么多，上一帧的方向和位置都不能用。
+        // 这一帧不发布镖头镖尾（发 0,0），但记住中心，让下一帧用运动方向重新定向。
+        const double teleport_px = 0.25 * static_cast<double>(img_msg->width);
+        if (dart_has_last_center_) {
+            const cv::Point2d jump = center - dart_last_center_;
+            if (cv::norm(jump) > teleport_px) {
+                dart_has_last_axis_ = false;
+                dart_last_center_ = center;
+                cv::Point2d invalid(0.0, 0.0);
+                detections_publish(img_msg->header, light_centers, invalid, invalid);
+                return;
+            }
+        }
 
-        const cv::Point2d axis = front_mid - back_mid;   // 当前帧尾到头向量
-        const cv::Point2d move = center - last_center;   // 这一帧相对上一帧的位移
-        const double move_len = cv::norm(move);
-        const double axis_len = cv::norm(axis);
+        if (dart_has_last_axis_ && axis_len > 1e-6) {
+            if (axis.dot(dart_last_axis_) < 0.0) {
+                std::swap(front_mid, back_mid);
+                axis = -axis;
+            }
+        }
 
-        if (last_center.x >= 0.0 && move_len > 2.0 && axis_len > 1e-6) {
-            // 夹角余弦
-            const double cos_angle = axis.dot(move) / (axis_len * move_len);
-            if (cos_angle > 0.3 || cos_angle < -0.3) {
-                if (cos_angle < 0.0) {  // 指向反了，交换
-                    const cv::Point2d tmp = front_mid;
-                    front_mid = back_mid;
-                    back_mid = tmp;
+        // 第二步：再用运动方向纠正一次。这一步主要给"第一帧"和"丢失后重新出现"用，
+        // 有了上一步之后它很少再触发。
+        if (dart_has_last_center_) {
+            const cv::Point2d move = center - dart_last_center_;
+            const double move_len = cv::norm(move);
+            if (move_len > 2.0 && axis_len > 1e-6) {
+                const double cos_angle = axis.dot(move) / (axis_len * move_len);
+                if (cos_angle < -0.3) {  // 指向反了，交换
+                    std::swap(front_mid, back_mid);
+                    axis = -axis;
                 }
             }
+        }
+
+        // 只有真正找到灯条的帧才更新历史，坏帧不会再把方向带偏
+        dart_last_center_ = center;
+        dart_has_last_center_ = true;
+        axis_len = cv::norm(axis);
+        if (axis_len > 1e-6) {
+            dart_last_axis_ = axis / axis_len;
+            dart_has_last_axis_ = true;
         }
 
         detections_publish(img_msg->header, light_centers, front_mid, back_mid);

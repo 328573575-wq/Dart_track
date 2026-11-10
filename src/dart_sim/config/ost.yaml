@@ -1,0 +1,41 @@
+%YAML:1.0
+---
+# 相机内参（OpenCV FileStorage 方言）
+#
+# 为什么不是标准 ost.yaml：C++ 里的 cv::FileStorage 只认这种写法——
+#   第一行必须是 %YAML:1.0，矩阵必须带 !!opencv-matrix 和 dt: d。
+# 这个文件同时被 dart_sim（Python，兼容读取）和 dart_track 的
+# solvepose_node / position_node 使用；改完两个包都要重新 colcon build。
+#
+# 注意：camera_calibration 那套工具读不了这种文件；以后用真机标定时，
+# 标定工具导出的标准 ost.yaml 也能被 sim 读（sim 两种格式都支持）。
+image_width: 640
+image_height: 480
+camera_name: dart_sim_camera
+camera_matrix: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [ 460., 0., 320.,
+           0., 460., 240.,
+           0., 0., 1. ]
+distortion_model: plumb_bob
+distortion_coefficients: !!opencv-matrix
+   rows: 1
+   cols: 5
+   dt: d
+   data: [ 0., 0., 0., 0., 0. ]
+rectification_matrix: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [ 1., 0., 0.,
+           0., 1., 0.,
+           0., 0., 1. ]
+projection_matrix: !!opencv-matrix
+   rows: 3
+   cols: 4
+   dt: d
+   data: [ 460., 0., 320., 0.,
+           0., 460., 240., 0.,
+           0., 0., 1., 0. ]

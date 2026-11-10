@@ -12,6 +12,7 @@ from __future__ import annotations
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 
 from geometry_msgs.msg import PointStamped
 from sensor_msgs.msg import Image
@@ -24,12 +25,14 @@ except ImportError:  # pragma: no cover - depends on the machine
 
 
 class SimViewer(Node):
-    def __init__(self):
+    def __init__(self, show_truth=None):
         super().__init__('sim_viewer')
         self.declare_parameter('window', 'dart_sim')
         self.declare_parameter('show_truth', True)
         self.window = str(self.get_parameter('window').value)
         self.show_truth = bool(self.get_parameter('show_truth').value)
+        if show_truth is not None:
+            self.show_truth = bool(show_truth)
 
         self.light_pixels = None
         self.dart_pixel = None
@@ -43,7 +46,9 @@ class SimViewer(Node):
         else:
             self.get_logger().info('viewer ready; press q in the image window to quit')
 
-        self.create_subscription(Image, '/camera/image_raw', self._on_image, 10)
+        # 和相机发布端一致：best effort。用默认的 reliable 会收不到图（QoS 不兼容）
+        self.create_subscription(Image, '/camera/image_raw', self._on_image,
+                                 qos_profile_sensor_data)
         self.create_subscription(Float64MultiArray, '/sim/truth/light_pixels',
                                  self._on_lights, 10)
         self.create_subscription(PointStamped, '/sim/truth/dart_pixel',

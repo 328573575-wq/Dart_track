@@ -2,8 +2,7 @@
 
 #include <chrono>
 #include <cstdint>
-#include <deque>
-#include <map>
+#include <mutex>
 
 #include <opencv2/opencv.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -14,11 +13,16 @@ using Detections = dart_track_interfaces::msg::Detections;
 
 namespace dart_track
 {
-    
+
 
     // 纯显示节点：把 /dart_detections 里的点画到 /camera/image_raw 上，然后弹窗显示。
-    // 关键设计：先攒一小段图，等"同一帧"的识别结果到了再显示，
-    // 这样画上去的点和这张图严丝合缝，不会出现"点比画面慢一帧"的错位。
+    //
+    // 显示策略是"最新帧优先"，不再排队等识别结果：
+    //   - 图像回调只做缩放，然后把"最新一帧"存下来，立刻返回，绝不在回调里等；
+    //   - 定时器按 draw_max_fps 的节奏取最新一帧画图、显示；
+    //   - 识别结果只保留最新一份，HUD 里写明"点比这一帧旧了多少毫秒"；
+    //     旧超过 draw_det_max_age 就不画点，宁可没点，也不把过期的点画到新画面上。
+    // 这样显示延迟恒定为"一帧"，识别慢或没结果时最多是"没点"，不会越积越卡。
     class DrawScreenNode : public rclcpp::Node
     {
     public:
@@ -27,44 +31,41 @@ namespace dart_track
     private:
         void image_callback(const sensor_msgs::msg::Image::ConstSharedPtr & img_msg);
         void detections_callback(const Detections::SharedPtr msg);
+        void render_tick();   // 定时器回调：唯一的绘制入口
 
-        void flush_pending();
-        void render_frame(cv::Mat & frame, const Detections * det, double age_ms);
+        bool render_frame(cv::Mat & frame, const Detections * det, double det_age_ms,
+                          double cam_fps, double view_fps);
         void draw_detections(cv::Mat & frame, const Detections & det);
-        void draw_hud(cv::Mat & frame, const Detections * det, double age_ms);
-        void refresh_fps();
-
-        // 一帧等待配对的图像
-        struct PendingFrame
-        {
-            int64_t stamp_ns = 0;                              // 这一帧的时间戳，用来找它对应的识别结果
-            std::chrono::steady_clock::time_point arrived;     // 什么时候收到的，用来判超时
-            cv::Mat frame;
-        };
+        void draw_hud(cv::Mat & frame, const Detections * det, double det_age_ms,
+                      double cam_fps, double view_fps);
+        void refresh_fps_locked();   // 调用者必须已经持有 mtx_
 
         rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
         rclcpp::Subscription<Detections>::SharedPtr detections_sub_;
+        rclcpp::TimerBase::SharedPtr render_timer_;
+        rclcpp::CallbackGroup::SharedPtr render_group_;   // 让绘制和收图不在同一个组里排队
 
-        std::deque<PendingFrame> pending_;                     // 按到达顺序排队，等识别结果
-        std::map<int64_t, Detections::SharedPtr> det_cache_;   // 时间戳 -> 该帧的识别结果
+        std::mutex mtx_;                       // 保护下面这几个"最新值"
+        cv::Mat latest_frame_;                 // 最新一帧（已经按 DRAW_SCALE 缩放过）
+        int64_t latest_stamp_ns_ = 0;          // 这帧的时间戳
+        int64_t last_rendered_stamp_ns_ = -1;  // 上一次真正画出去的是哪一帧
+        int64_t last_painted_det_stamp_ns_ = -1;  // 上一次画出去时用的检测结果
+        std::chrono::steady_clock::time_point last_paint_{};  // 上一次重画的时刻
+        Detections::SharedPtr latest_det_;     // 最新一份识别结果
+        int64_t latest_det_stamp_ns_ = 0;      // 它的时间戳
 
-        double DRAW_MAX_FPS = 60.0;         // 显示上限，超过就丢帧（不影响配对）
+        double DRAW_MAX_FPS = 60.0;         // 绘制频率上限
         double DRAW_SCALE = 0.5;            // 显示缩放
-        double DRAW_PAIR_TIMEOUT = 0.2;     // 等识别结果的极限（秒），等不到就不带点直接显示
+        double DRAW_DET_MAX_AGE = 0.3;      // 识别结果比当前帧旧超过这么多秒就不画点
         bool SHOW_WINDOW = true;            // 无图形界面时可关掉
 
-        std::chrono::steady_clock::time_point last_draw_time_;
-        std::chrono::steady_clock::time_point fps_window_start_;
-        uint64_t in_count_ = 0;             // 相机送来的帧数（限速前统计）
-        uint64_t view_count_ = 0;           // 窗口真正刷新次数（imshow 之后统计）
+        std::chrono::steady_clock::time_point fps_window_start_{};
+        uint64_t in_count_ = 0;             // 图像回调收到多少帧
+        uint64_t view_count_ = 0;           // 窗口实际刷新多少次
         double cam_fps_ = 0.0;
         double view_fps_ = 0.0;
 
         bool window_ready_ = false;
         bool window_broken_ = false;
-
-        // 队列长度上限，纯粹为了控制内存（每帧 1080x1440x3 ≈ 4.6MB）
-        static constexpr size_t kMaxPending = 6;
-        static constexpr size_t kMaxDetCache = 24;
     };
 }  // namespace dart_track

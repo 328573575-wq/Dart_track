@@ -21,6 +21,8 @@
   <depend>rclcpp_components</depend>
   <depend>dart_track_interfaces</depend>
   <depend>dart_point_interfaces</depend>
+  <depend>visualization_msgs</depend>
+  <depend>ament_index_cpp</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

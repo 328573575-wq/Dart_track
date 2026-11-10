@@ -24,12 +24,8 @@ namespace dart_track
         //真实坐标下四个引导灯的中心坐标
         std::vector<cv::Point3d> light_centers_3d_; //单位是m
         //内参和畸变
-        cv::Mat camera_matrix_= (cv::Mat_<double>(3, 3) <<
-                                460.0,   0.0, 320.0,
-                                0.0, 460.0, 240.0,
-                                0.0,   0.0,   1.0);
-        cv::Mat dist_coeffs_ = (cv::Mat_<double>(1, 5) <<
-        0.0, 0.0, 0.0, 0.0, 0.0);
+        cv::Mat camera_matrix_;
+        cv::Mat dist_coeffs_;
 
     private:
         void solve_pose_callback(const Detections::ConstSharedPtr& detections_msg);

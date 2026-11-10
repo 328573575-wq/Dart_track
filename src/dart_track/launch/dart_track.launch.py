@@ -22,7 +22,8 @@ def generate_launch_description():
         recognition_node,
         draw_node,
         solvepose_node,
-        position_node
+        position_node,
+        marker_node
     ]
 
     dart_track_container = ComposableNodeContainer(

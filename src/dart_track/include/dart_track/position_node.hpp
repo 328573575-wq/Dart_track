@@ -24,12 +24,8 @@ namespace dart_track
     {
     private:
         //内参和畸变
-        cv::Mat camera_matrix_=(cv::Mat_<double>(3, 3) <<
-    460.0,   0.0, 320.0,
-      0.0, 460.0, 240.0,
-      0.0,   0.0,   1.0);
-        cv::Mat dist_coeffs_=(cv::Mat_<double>(1, 5) <<
-    0.0, 0.0, 0.0, 0.0, 0.0);
+        cv::Mat camera_matrix_;
+        cv::Mat dist_coeffs_;
         //TF监听
         std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
         std::unique_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -44,7 +40,8 @@ namespace dart_track
         (
             const std_msgs::msg::Header & header,
             cv::Point3d& dart_real_front,
-            cv::Point3d& dart_real_back);
+            cv::Point3d& dart_real_back,
+            double& angle);
 
     public:
         explicit PositionNode(const rclcpp::NodeOptions & options);

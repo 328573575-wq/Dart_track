@@ -1,35 +1,29 @@
-# Synthetic scene for the dart measurement project.
+# 场景参数（相机内参和引导灯坐标不在这里）。
+#
+# 两个和识别包共用的配置文件放在同一目录：
+#   real_light_centers.yaml  四个引导灯的坐标（格式和 dart_track/config 下那份完全一样）
+#   ost.yaml                 相机内参（camera_calibration 的 ost.yaml 格式）
+# 改完这两个文件直接重启仿真即可，画面和真值都会跟着变；
+# 把这两个文件复制到识别包的 config 下，测量和解算用的就是同一套参数。
 #
 # Frames
-#   launch/world: origin at the launcher, +y = horizontal launch direction,
-#                 +z = up, +x = right.  The dart flies in the x = 0 plane.
-#   camera:       OpenCV optical frame, from the eye/target/up look-at pose.
+#   throw:  origin at the launcher, +y = horizontal launch direction,
+#           +z = up, +x = right.  The dart flies in the x = 0 plane.
+#   camera: OpenCV optical frame, from the eye/target/up look-at pose.
 #
-# Everything here is in metres / pixels / seconds.
+# Everything here is in metres / seconds.
 
 frame:
-  width: 640
-  height: 480
-  fps: 60.0
+  fps: 30.0
 
 camera:
-  fx: 460.0
-  fy: 460.0
-  cx: 320.0
-  cy: 240.0
-  # k1, k2, p1, p2, k3  (zero = ideal pinhole; set real values later)
-  distortion: [0.0, 0.0, 0.0, 0.0, 0.0]
+  # 相机在 throw 下的安装位置（内参来自 ost.yaml）
   eye: [-3.8, 1.9, 1.8]
   target: [0.0, 2.2, 0.7]
   up: [0.0, 0.0, 1.0]
 
 lights:
-  # rectangle corners on the ground (z = 0); 1.0 m x 1.5 m
-  points:
-    - [-0.5, 2.0, 0.0]
-    - [ 0.5, 2.0, 0.0]
-    - [-0.5, 3.5, 0.0]
-    - [ 0.5, 3.5, 0.0]
+  # 灯只在这里配置半径；位置在 real_light_centers.yaml
   radius: 0.06
 
 dart:
@@ -38,17 +32,17 @@ dart:
   elevation_deg: 35.0
   gravity: 9.81
   strip_length: 0.15
-  strip_width: 0.02
+  strip_width: 0.03
 
 render:
   background: 18.0
   noise_sigma: 2.5
   light_gain: 255.0
   dart_gain: 255.0
-  # RGB 0..1. Green guide lights + warm-white dart strip, so the HSV
-  # thresholds in recognition_node.cpp actually see them.
+  # RGB 0..1. Green guide lights + green dart strip (same colour as the lights;
+  # recognition separates them by area / aspect ratio).
   light_color: [0.15, 1.0, 0.32]
-  dart_color: [1.0, 0.95, 0.85]
+  dart_color: [0.15, 1.0, 0.32]
   exposure_frac: 0.5
   motion_blur_samples: 5
   clutter: 6

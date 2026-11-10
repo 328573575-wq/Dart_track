@@ -24,7 +24,7 @@ draw_node = ComposableNode(
     package='dart_track',
     plugin='dart_track::DrawScreenNode',
     name='draw_screen_node',
-    parameters=[{'draw_max_fps': 30.0, 'draw_scale': 0.5}],
+    parameters=[{'draw_max_fps': 60.0, 'draw_scale': 0.5, 'draw_det_max_age': 0.3}],
     extra_arguments=[{'use_intra_process_comms': True}]
 )
 
@@ -40,6 +40,15 @@ position_node = ComposableNode(
     package='dart_track',
     plugin='dart_track::PositionNode',
     name='position_node',
+    extra_arguments=[{'use_intra_process_comms': True}]
+)
+
+# 可视化：把 /dart_point 转成 Foxglove 3D 面板认的 Marker
+marker_node = ComposableNode(
+    package='dart_track',
+    plugin='dart_track::MarkerNode',
+    name='marker_node',
+    parameters=[real_light_centers],
     extra_arguments=[{'use_intra_process_comms': True}]
 )
 

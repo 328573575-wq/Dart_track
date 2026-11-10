@@ -10,7 +10,8 @@ setup(
         ('share/ament_index/resource_index/packages',
          ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name + '/config', ['config/scene.yaml']),
+        ('share/' + package_name + '/config',
+         ['config/scene.yaml', 'config/real_light_centers.yaml', 'config/ost.yaml']),
         ('share/' + package_name + '/launch', ['launch/sim.launch.py']),
     ],
     install_requires=['setuptools'],
@@ -24,6 +25,7 @@ setup(
         'console_scripts': [
             'sim_world = dart_sim.sim_world:main',
             'sim_viewer = dart_sim.sim_viewer:main',
+            'sim_eval = dart_sim.sim_eval:main',
         ],
     },
 )

@@ -17,8 +17,8 @@
     dart_v_hi: 255
 
     # 最小面积
-    light_min_area: 30.0
-    dart_min_area: 60.0
+    light_min_area: 130.0
+    dart_min_area: 40.0
 
     # 灯条长宽比
     length_width_ratio: 1.8

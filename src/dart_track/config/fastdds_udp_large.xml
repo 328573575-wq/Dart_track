@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  Fast-DDS 传输调优：把 UDP 的收发缓冲从默认 64 KB 提到 16 MB。
+
+  为什么要这个文件：
+  Fast-DDS 默认给每个 UDP socket 只分配 64 KB 缓冲。一帧图像
+  （640x480x3 ≈ 0.9 MB，真机 1440x1080x3 ≈ 4.6 MB）会被拆成十几个 64 KB 的
+  数据包，接收方来不及取走就会丢包 —— 一帧里丢一个包，整帧作废。
+  表现就是"发布端 30 Hz，订阅端只收到 5~10 Hz"。
+
+  实测（640x480 @ 30 Hz，同一台机器）：
+    默认缓冲        收到 8~15 fps
+    本文件（16 MB） 收到 27~30 fps
+
+  生效方式：dart_track 通过 ament 环境钩子把它设成
+  FASTRTPS_DEFAULT_PROFILES_FILE，只要 source 过工作空间就会自动生效。
+-->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>udp_large</transport_id>
+      <type>UDPv4</type>
+      <sendBufferSize>16777216</sendBufferSize>
+      <receiveBufferSize>16777216</receiveBufferSize>
+    </transport_descriptor>
+  </transport_descriptors>
+
+  <participant profile_name="dart_large_buffer" is_default_profile="true">
+    <rtps>
+      <userTransports>
+        <transport_id>udp_large</transport_id>
+      </userTransports>
+      <useBuiltinTransports>false</useBuiltinTransports>
+    </rtps>
+  </participant>
+</profiles>

@@ -8,7 +8,7 @@ invert with PnP / ray-plane intersection.
 
 Frames
 ------
-launch (world)
+throw (also called launch/world in older notes)
     Origin at the launcher.  +y is the horizontal launch direction, +z is up,
     +x completes a right-handed frame.  The dart is constrained to x = 0.
 camera (OpenCV convention)
@@ -234,6 +234,84 @@ class DartTrajectory:
 
 
 # ---------------------------------------------------------------------------
+# external config files (shared with the measurement package)
+# ---------------------------------------------------------------------------
+def load_lights_yaml(path):
+    """Read ``real_light_centers.yaml`` (ROS parameter style).
+
+    The file is exactly the one used by the measurement package::
+
+        /**:
+          ros__parameters:
+            point_0: [x, y, z]
+            ...
+    """
+    import yaml
+
+    with open(path, 'r', encoding='utf-8') as handle:
+        cfg = yaml.safe_load(handle)
+    params = cfg.get('/**', cfg).get('ros__parameters', {})
+    points = []
+    for index in range(4):
+        key = f'point_{index}'
+        if key not in params:
+            raise ValueError(f'{path}: missing {key}')
+        points.append([float(v) for v in params[key]])
+    return np.asarray(points, dtype=float)
+
+
+def load_camera_yaml(path):
+    """Read camera intrinsics from either YAML dialect.
+
+    * OpenCV ``FileStorage`` dialect (``%YAML:1.0`` + ``!!opencv-matrix`` +
+      ``dt``), which is what ``config/ost.yaml`` in this package uses so the
+      C++ nodes can read it directly;
+    * the plain ``camera_calibration`` ost.yaml style (no directive / no
+      ``!!opencv-matrix`` tags), so a real calibration export also works.
+
+    Returns ``(width, height, K, D)``.  Only plumb_bob / rational_polynomial
+    are supported (the renderer implements Brown-Conrady).
+    """
+    import yaml
+
+    with open(path, 'r', encoding='utf-8') as handle:
+        text = handle.read()
+
+    # 把 OpenCV 方言降级成普通 YAML：去掉 %YAML 指令，去掉 !!opencv-matrix 标签
+    cleaned = []
+    for line in text.splitlines():
+        if line.lstrip().startswith('%YAML'):
+            continue
+        cleaned.append(line.replace('!!opencv-matrix', ''))
+    cfg = yaml.safe_load('\n'.join(cleaned))
+
+    width = int(cfg['image_width'])
+    height = int(cfg['image_height'])
+
+    def to_matrix(node, rows, cols):
+        if isinstance(node, dict):
+            data = node['data']
+            rows = int(node.get('rows', rows))
+            cols = int(node.get('cols', cols))
+        else:
+            data = node
+        return np.asarray(data, dtype=float).reshape(rows, cols)
+
+    K = to_matrix(cfg['camera_matrix'], 3, 3)
+    d_node = cfg.get('distortion_coefficients', cfg.get('dist_coeffs'))
+    D = np.zeros(5) if d_node is None else to_matrix(d_node, 1, 5).ravel()
+
+    model = str(cfg.get('distortion_model', 'plumb_bob'))
+    if model not in ('plumb_bob', 'rational_polynomial'):
+        raise ValueError(
+            f'{path}: distortion_model={model!r} is not supported; '
+            'the renderer implements plumb_bob only')
+    if D.size < 5:
+        D = np.pad(D, (0, 5 - D.size))
+    return width, height, K, D
+
+
+# ---------------------------------------------------------------------------
 # full scene
 # ---------------------------------------------------------------------------
 @dataclass
@@ -290,6 +368,9 @@ class Scene:
             'dart_px': uv_dart[0],
             'dart_depth': depth_dart[0],
             'dart_valid': valid_dart[0],
+            'strip_front': nose,
+            'strip_back': tail,
+            'angle_deg': float(np.degrees(np.arctan2(v[2], v[1]))),
             'strip_tail_px': uv_tail[0],
             'strip_nose_px': uv_nose[0],
             'light_px': uv_lights,
@@ -298,22 +379,28 @@ class Scene:
         }
 
     @classmethod
-    def from_yaml(cls, path):
+    def from_yaml(cls, path, lights_file=None, camera_file=None):
         import yaml
 
         with open(path, 'r', encoding='utf-8') as handle:
             cfg = yaml.safe_load(handle)
 
+        # 默认和 scene.yaml 放在同一个目录：real_light_centers.yaml + ost.yaml
+        base = os.path.dirname(os.path.abspath(path))
+        lights_file = lights_file or os.path.join(base, 'real_light_centers.yaml')
+        camera_file = camera_file or os.path.join(base, 'ost.yaml')
+
         cam_cfg = cfg['camera']
         frame_cfg = cfg['frame']
+        width, height, K, D = load_camera_yaml(camera_file)
         camera = CameraModel(
-            width=int(frame_cfg['width']),
-            height=int(frame_cfg['height']),
-            fx=float(cam_cfg['fx']),
-            fy=float(cam_cfg['fy']),
-            cx=float(cam_cfg['cx']),
-            cy=float(cam_cfg['cy']),
-            distortion=np.asarray(cam_cfg.get('distortion', [0.0] * 5), dtype=float),
+            width=width,
+            height=height,
+            fx=float(K[0, 0]),
+            fy=float(K[1, 1]),
+            cx=float(K[0, 2]),
+            cy=float(K[1, 2]),
+            distortion=D,
             eye=np.asarray(cam_cfg['eye'], dtype=float),
             target=np.asarray(cam_cfg['target'], dtype=float),
             up=np.asarray(cam_cfg.get('up', [0.0, 0.0, 1.0]), dtype=float),
@@ -332,7 +419,7 @@ class Scene:
         render_cfg = cfg.get('render', {})
         return cls(
             camera=camera,
-            lights=np.asarray(cfg['lights']['points'], dtype=float),
+            lights=load_lights_yaml(lights_file),
             light_radius=float(cfg['lights'].get('radius', 0.06)),
             dart=dart,
             fps=float(frame_cfg.get('fps', 60.0)),
