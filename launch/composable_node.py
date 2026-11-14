@@ -33,7 +33,7 @@ draw_node = ComposableNode(
     package='dart_track',
     plugin='dart_track::DrawScreenNode',
     name='draw_screen_node',
-    parameters=[{'draw_max_fps': 60.0, 'draw_scale': 0.5, 'draw_det_max_age': 0.3}],
+    parameters=[{'draw_max_fps': 160.0, 'draw_scale': 0.5, 'draw_det_max_age': 0.3}],
     extra_arguments=[{'use_intra_process_comms': True}]
 )
 

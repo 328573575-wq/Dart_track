@@ -76,8 +76,15 @@ namespace dart_track
         marker_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
             "/dart_viz/markers", rclcpp::QoS(rclcpp::KeepLast(1)).reliable());
 
+        // 引导灯是静态的，每秒重发一次：
+        // 这样即使一只飞镖都没检测到（没有 /dart_point），3D 里也能看到灯；
+        // 后连上来的 Foxglove 客户端最多等 1 秒也能收到。
+        lights_timer_ = this->create_wall_timer(
+            std::chrono::seconds(1), [this]() { this->lights_tick(); });
+
         RCLCPP_INFO(get_logger(),
-                    "可视化节点已启动：/dart_point -> /dart_viz/markers（frame=throw）");
+                    "可视化节点已启动：/dart_point -> /dart_viz/markers（frame=throw），"
+                    "引导灯每秒刷新一次");
     }
 
     visualization_msgs::msg::Marker MarkerNode::make_marker(
@@ -182,6 +189,27 @@ namespace dart_track
         array.markers.push_back(line);
     }
 
+    void MarkerNode::lights_tick()
+    {
+        std_msgs::msg::Header header;
+        header.stamp = this->now();
+        header.frame_id = "throw";
+
+        visualization_msgs::msg::MarkerArray array;
+        add_lights(array, header);
+
+        // 飞镖还"新鲜"的话连它一起重发，这样不同版本的客户端
+        // 即使把 MarkerArray 当成"完整快照"，也不会把飞镖抹掉。
+        if (has_dart_ &&
+            (this->now() - last_dart_time_).seconds() < kDartKeepAlive)
+        {
+            add_dart(array, header, last_front_, last_back_, last_angle_deg_);
+            add_trajectory(array, header);
+        }
+
+        marker_pub_->publish(array);
+    }
+
     void MarkerNode::dart_point_callback(const DartPoint::ConstSharedPtr & msg)
     {
         const geometry_msgs::msg::Point & front = msg->dart_real_front;
@@ -220,6 +248,12 @@ namespace dart_track
         while (trajectory_.size() > kMaxTrajectory) {
             trajectory_.pop_front();
         }
+
+        last_front_ = front;
+        last_back_ = back;
+        last_angle_deg_ = msg->dart_angle_degree;
+        last_dart_time_ = this->now();
+        has_dart_ = true;
 
         visualization_msgs::msg::MarkerArray array;
         add_lights(array, msg->header);

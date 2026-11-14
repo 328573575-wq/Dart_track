@@ -55,8 +55,13 @@ namespace dart_track
         void add_trajectory(visualization_msgs::msg::MarkerArray & array,
                             const std_msgs::msg::Header & header);
 
+        // 定时器回调：不依赖飞镖，单独把引导灯发出去。
+        // 没有飞镖时 /dart_point 不存在，但引导灯还是要看得见。
+        void lights_tick();
+
         rclcpp::Subscription<DartPoint>::SharedPtr dart_point_sub_;
         rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
+        rclcpp::TimerBase::SharedPtr lights_timer_;
 
         // 四个引导灯在发射系下的坐标（和 solvepose 用同一份参数）
         std::vector<geometry_msgs::msg::Point> lights_;
@@ -67,6 +72,14 @@ namespace dart_track
         static constexpr size_t kMaxTrajectory = 600;
         // 两帧之间跳这么远，说明不是同一次飞行（仿真 loop 重来 / 重新捕获），清空轨迹
         static constexpr double kTeleportDistance = 2.0;
+
+        // 最近一次飞镖状态，定时器刷新时如果它还新鲜，就连飞镖一起重发
+        geometry_msgs::msg::Point last_front_;
+        geometry_msgs::msg::Point last_back_;
+        double last_angle_deg_ = 0.0;
+        rclcpp::Time last_dart_time_{0, 0, RCL_ROS_TIME};
+        bool has_dart_ = false;
+        static constexpr double kDartKeepAlive = 1.0;  // 秒
     };
 
 }  // namespace dart_track

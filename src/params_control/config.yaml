@@ -45,8 +45,8 @@ dart_tracker:
   min_area: 10
 
 camera_mode:
-  recognition_exposure_time: 4000.0  # 识别模式曝光时间 (us)
-  track_exposure_time: 4000.0         # 跟踪模式曝光时间 (us)
+  recognition_exposure_time: 3000.0  # 识别模式曝光时间 (us)
+  track_exposure_time: 3000.0         # 跟踪模式曝光时间 (us)
   track_timeout_sec: 5.0             # 跟踪最长持续时间 (s)
  
 iray_camera:
@@ -73,7 +73,7 @@ serial_bridge:
 hk_camera:
   width: 1440          # 图像宽度
   height: 1080         # 图像高度
-  fps: 60.0           # 采集帧率（调试期 30 帧够用，曝光上限也随之放宽到 33ms）
+  fps: 160.0           # 采集帧率（调试期 30 帧够用，曝光上限也随之放宽到 33ms）
   gain: 0.0           # 增益 (dB)，量程 0~17
   camera_acsn: ""      # 相机序列号，留空则使用枚举到的第一台
   balance_white_auto: 0  # 白平衡自动模式：0=关闭(固定)，1=连续，2=一次
