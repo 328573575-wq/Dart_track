@@ -331,6 +331,8 @@ class Scene:
     seed: int
     light_color: tuple
     dart_color: tuple
+    # 第二台相机（可选）。None 表示只模拟一台。
+    camera2: object = None
 
     @property
     def width(self):
@@ -379,7 +381,7 @@ class Scene:
         }
 
     @classmethod
-    def from_yaml(cls, path, lights_file=None, camera_file=None):
+    def from_yaml(cls, path, lights_file=None, camera_file=None, camera_file2=None):
         import yaml
 
         with open(path, 'r', encoding='utf-8') as handle:
@@ -405,6 +407,26 @@ class Scene:
             target=np.asarray(cam_cfg['target'], dtype=float),
             up=np.asarray(cam_cfg.get('up', [0.0, 0.0, 1.0]), dtype=float),
         )
+
+        # 第二台相机：scene.yaml 里写了 camera2 才有。
+        # 内参默认沿用第一台（ost.yaml），也可以用 camera_file2 指定 ost2.yaml。
+        camera2 = None
+        cam2_cfg = cfg.get('camera2')
+        if cam2_cfg:
+            cam2_intr = camera_file2 or camera_file
+            w2, h2, K2, D2 = load_camera_yaml(cam2_intr)
+            camera2 = CameraModel(
+                width=w2,
+                height=h2,
+                fx=float(K2[0, 0]),
+                fy=float(K2[1, 1]),
+                cx=float(K2[0, 2]),
+                cy=float(K2[1, 2]),
+                distortion=D2,
+                eye=np.asarray(cam2_cfg['eye'], dtype=float),
+                target=np.asarray(cam2_cfg['target'], dtype=float),
+                up=np.asarray(cam2_cfg.get('up', [0.0, 0.0, 1.0]), dtype=float),
+            )
 
         dart_cfg = cfg['dart']
         dart = DartTrajectory(
@@ -435,6 +457,7 @@ class Scene:
                 'light_color', [0.15, 1.0, 0.32])),
             dart_color=tuple(float(v) for v in render_cfg.get(
                 'dart_color', [1.0, 0.95, 0.85])),
+            camera2=camera2,
         )
 
 

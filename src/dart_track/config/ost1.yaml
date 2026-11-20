@@ -1,21 +1,21 @@
 %YAML:1.0
 ---
-image_width: 640
-image_height: 480
-camera_name: dart_sim_camera
+image_width: 1440
+image_height: 1080
+camera_name: "narrow_stereo"
 camera_matrix: !!opencv-matrix
    rows: 3
    cols: 3
    dt: d
-   data: [ 460., 0., 320.,
-           0., 460., 240.,
+   data: [ 1818.70677, 0., 714.77619,
+           0., 1814.60663, 554.65433,
            0., 0., 1. ]
-distortion_model: plumb_bob
+distortion_model: "plumb_bob"
 distortion_coefficients: !!opencv-matrix
    rows: 1
    cols: 5
    dt: d
-   data: [ 0., 0., 0., 0., 0. ]
+   data: [ -0.073996, 0.207328, 0.000421, -0.000154, 0.000000 ]
 rectification_matrix: !!opencv-matrix
    rows: 3
    cols: 3
@@ -27,6 +27,6 @@ projection_matrix: !!opencv-matrix
    rows: 3
    cols: 4
    dt: d
-   data: [ 460., 0., 320., 0.,
-           0., 460., 240., 0.,
+   data: [ 1807.46558, 0., 714.16886, 0.,
+           0., 1803.88989, 554.44461, 0.,
            0., 0., 1., 0. ]

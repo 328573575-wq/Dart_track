@@ -26,6 +26,15 @@ namespace dart_track
         //内参和畸变
         cv::Mat camera_matrix_;
         cv::Mat dist_coeffs_;
+        // 坐标系名：双相机时每条流水线一个（camera1 / camera2）
+        std::string parent_frame_ = "throw";
+        std::string camera_frame_ = "camera";
+        // 相机大致安装位置（可选），用于消除对称灯阵的位姿二义性
+        std::vector<double> expected_position_;
+        bool has_expected_position_ = false;
+        // 最近一次解出的相机中心，用来在对称灯阵的二义性里保持连续
+        cv::Point3d last_position_{0.0, 0.0, 0.0};
+        bool last_position_valid_ = false;
 
     private:
         void solve_pose_callback(const Detections::ConstSharedPtr& detections_msg);

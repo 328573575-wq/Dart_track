@@ -25,11 +25,15 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/header.hpp>
+
+#include <condition_variable>
+
+#include <opencv2/opencv.hpp>
 
 #include "MvCameraControl.h"
 #include "dart_interfaces/srv/set_exposure.hpp"
-
-#include "params_control/params_control.hpp"
 
 // 旋转内核与 kRotateImageCcw90 由共享头提供(华睿节点同样使用)
 #include "ros_camera/image_rotate.hpp"
@@ -66,7 +70,7 @@ private:
     // SDK 锁内：把一帧原始数据转为 bgr8，成功返回 true。
     // 旋转开启时写入私有 bgr_scratch_（原始方向），否则直写 image_msg_。
     bool convertFrame(const MV_FRAME_OUT & out_frame);
-    // 按 compressed_fps_ 限频将当前帧压缩为 jpeg 发布到 /camera/compressed
+    // 把当前帧交给编码线程，压成 jpeg 发布到 /camera/compressed
     void publishCompressed();
     void setExposureCallback(
         const std::shared_ptr<dart_interfaces::srv::SetExposure::Request> request,
@@ -82,6 +86,10 @@ private:
     double gain_db_ = 16.0;
     std::string camera_acsn_;
     std::string frame_id_;
+    int balance_white_auto_ = 0;   // 0=关 1=连续 2=一次
+    std::string image_topic_;
+    std::string compressed_topic_;
+    std::string exposure_service_name_;
     int jpeg_quality_ = 80;     // 压缩质量 (1-100)
     int compressed_fps_ = 30;   // 压缩话题发布帧率，0 表示关闭
 
@@ -89,11 +97,30 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr compressed_pub_;
     rclcpp::Service<dart_interfaces::srv::SetExposure>::SharedPtr exposure_service_;
+    // 把当前曝光广播出去，让 draw 之类只关心显示的地方能拿到（不用反查服务）
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr exposure_pub_;
+    rclcpp::TimerBase::SharedPtr exposure_timer_;
+    std::string exposure_topic_;
     std::mutex sdk_mutex_;
 
     std::vector<unsigned char> bgr_scratch_;  // 旋转开启时 MVS 转换的中间缓冲（原始方向 BGR）
     std::vector<unsigned char> jpeg_buffer_;  // JPEG 编码输出缓冲，预分配复用
     int64_t last_compressed_ns_ = 0;          // 上次压缩发布的主机时间(ns)，用于限频
+
+    // JPEG 编码放在独立线程：编码 1440x1080 要几毫秒到几十毫秒，
+    // 放在采集线程里会直接把取流节奏拖垮（实测两路 30fps 会掉到 20fps）。
+    // 单槽设计：编码跟不上就丢旧帧，绝不排队积压。
+    std::thread jpeg_thread_;
+    std::mutex jpeg_mutex_;
+    std::condition_variable jpeg_cv_;
+    std::vector<uint8_t> jpeg_src_;           // 待编码的一帧（bgr8）
+    std_msgs::msg::Header jpeg_header_;
+    uint32_t jpeg_width_ = 0;
+    uint32_t jpeg_height_ = 0;
+    uint32_t jpeg_step_ = 0;
+    bool jpeg_pending_ = false;
+    bool jpeg_stop_ = false;
+    void jpegLoop();
 
     std::atomic<bool> running_{false};
     std::thread capture_thread_;
@@ -106,23 +133,42 @@ private:
 HKCameraNode::HKCameraNode(const rclcpp::NodeOptions & options)
 : Node("hk_camera_node", options)
 {
-    // 相机参数统一从 params_control/config.yaml 的 [hk_camera] 段读取
-    width_ = HKParams::width;
-    height_ = HKParams::height;
-    fps_ = HKParams::fps;
-    exposure_us_ = camera_mode::Params::recognition_exposure_time;
-    gain_db_ = HKParams::gain;
-    camera_acsn_ = HKParams::camera_acsn;
-    frame_id_ = HKParams::frame_id;
-    jpeg_quality_ = HKParams::jpeg_quality;
-    compressed_fps_ = HKParams::compressed_fps;
+    // ------------------------------------------------------------------
+    // 参数：默认值写在下面 declare_parameter 的第二个参数里，
+    // 实际取值来自 ros_camera/config/camera_*.yaml —— 同一份代码开两台相机
+    // （每台用自己的序列号、话题名、frame）。
+    // ------------------------------------------------------------------
+    // 默认值直接写在代码里；实际取值来自 ros_camera/config/camera_*.yaml
+    width_ = declare_parameter<int>("width", 1440);
+    height_ = declare_parameter<int>("height", 1080);
+    fps_ = declare_parameter<double>("fps", 30.0);
+    exposure_us_ = declare_parameter<double>("exposure_us", 4000.0);
+    gain_db_ = declare_parameter<double>("gain", 0.0);
+    camera_acsn_ = declare_parameter<std::string>("camera_acsn", "");
+    frame_id_ = declare_parameter<std::string>("frame_id", "camera");
+    jpeg_quality_ = declare_parameter<int>("jpeg_quality", 80);
+    compressed_fps_ = declare_parameter<int>("compressed_fps", 30);
+    // 话题/服务名参数化：两条流水线各发到自己的话题，互不干扰
+    balance_white_auto_ = declare_parameter<int>("balance_white_auto", 0);
+    image_topic_ = declare_parameter<std::string>("image_topic", "/camera/image_raw");
+    compressed_topic_ = declare_parameter<std::string>(
+        "compressed_topic", "/camera/compressed");
+    exposure_service_name_ = declare_parameter<std::string>(
+        "exposure_service", "/camera/set_exposure");
+
+    RCLCPP_INFO(get_logger(),
+                "camera config: %dx%d @ %.1f fps, acsn='%s', topic=%s",
+                width_, height_, fps_, camera_acsn_.c_str(), image_topic_.c_str());
 
     image_pub_ = create_publisher<sensor_msgs::msg::Image>(
-        "/camera/image_raw", rclcpp::SensorDataQoS());
+        image_topic_, rclcpp::SensorDataQoS());
     compressed_pub_ = create_publisher<sensor_msgs::msg::CompressedImage>(
-        "/camera/compressed", rclcpp::SensorDataQoS());
+        compressed_topic_, rclcpp::SensorDataQoS());
+    exposure_topic_ = declare_parameter<std::string>("exposure_topic", "/camera/exposure");
+    exposure_pub_ = create_publisher<std_msgs::msg::Float64>(exposure_topic_, 10);
+
     exposure_service_ = create_service<dart_interfaces::srv::SetExposure>(
-        "/camera/set_exposure",
+        exposure_service_name_,
         std::bind(&HKCameraNode::setExposureCallback, this, std::placeholders::_1,
                   std::placeholders::_2));
 
@@ -146,8 +192,9 @@ HKCameraNode::HKCameraNode(const rclcpp::NodeOptions & options)
     }
     image_msg_->step = image_msg_->width * 3U;
     image_msg_->data.resize(image_msg_->step * image_msg_->height);
-    // JPEG 输出缓冲按未压缩尺寸预留，最坏情况也足够容纳
-    jpeg_buffer_.resize(image_msg_->step * image_msg_->height);
+    // JPEG 输出缓冲。给到未压缩尺寸的 2 倍：MVS 的 SaveImageEx3 在某些
+    // 固件上要求缓冲比原始图更大，刚好等于原始尺寸时会返回 0x80000002(BUFOVER)。
+    jpeg_buffer_.resize(image_msg_->step * image_msg_->height * 2);
     if constexpr (kRotateImageCcw90) {
         // MVS 转换输出缓冲：相机原始方向 WxH，字节数与旋转后的消息相同
         bgr_scratch_.resize(image_msg_->data.size());
@@ -157,11 +204,32 @@ HKCameraNode::HKCameraNode(const rclcpp::NodeOptions & options)
 
     running_.store(true);
     capture_thread_ = std::thread(&HKCameraNode::captureLoop, this);
+    if (compressed_fps_ > 0) {
+        jpeg_thread_ = std::thread(&HKCameraNode::jpegLoop, this);
+    }
+
+    // 1Hz 广播当前曝光：保证后启动的订阅者（比如 draw）也能拿到值
+    exposure_timer_ = create_wall_timer(std::chrono::seconds(1), [this]() {
+        if (!exposure_pub_) {
+            return;
+        }
+        std_msgs::msg::Float64 msg;
+        msg.data = exposure_us_;
+        exposure_pub_->publish(msg);
+    });
 }
 
 HKCameraNode::~HKCameraNode()
 {
     running_.store(false);
+    {
+        std::lock_guard<std::mutex> lock(jpeg_mutex_);
+        jpeg_stop_ = true;
+    }
+    jpeg_cv_.notify_all();
+    if (jpeg_thread_.joinable()) {
+        jpeg_thread_.join();
+    }
     if (capture_thread_.joinable()) {
         capture_thread_.join();
     }
@@ -185,6 +253,9 @@ bool HKCameraNode::selectCamera()
     }
 
     RCLCPP_INFO(get_logger(), "Found %u Hikvision camera(s)", device_list.nDeviceNum);
+
+    // 先把枚举到的所有序列号打出来，配错时一眼能看出该填什么
+    std::string available;
     for (unsigned int i = 0; i < device_list.nDeviceNum; ++i) {
         const auto * info = device_list.pDeviceInfo[i];
         std::string serial;
@@ -193,6 +264,7 @@ bool HKCameraNode::selectCamera()
         } else if (info->nTLayerType == MV_GIGE_DEVICE) {
             serial = reinterpret_cast<const char *>(info->SpecialInfo.stGigEInfo.chSerialNumber);
         }
+        available += (available.empty() ? "" : ", ") + serial;
         if (camera_acsn_.empty() || serial == camera_acsn_) {
             device_info_ = *info;
             RCLCPP_INFO(get_logger(), "Using camera: %s", serial.c_str());
@@ -200,10 +272,19 @@ bool HKCameraNode::selectCamera()
         }
     }
 
-    // 指定序列号未找到时回退第一台
-    device_info_ = *device_list.pDeviceInfo[0];
-    RCLCPP_WARN(get_logger(), "camera '%s' not found, fall back to the first device", camera_acsn_.c_str());
-    return true;
+    // 指定了序列号却没找到：直接报错，绝不"回退到第一台"。
+    // 回退会让两台相机节点抢同一台设备，表现就是"明明只插了一台，
+    // 两个话题却都出图"，非常难查。
+    if (camera_acsn_.empty()) {
+        device_info_ = *device_list.pDeviceInfo[0];
+        return true;
+    }
+
+    RCLCPP_ERROR(get_logger(),
+                 "找不到序列号为 '%s' 的相机。当前可用的有: %s。"
+                 "请检查 ros_camera/config/camera_*.yaml 里的 camera_acsn。",
+                 camera_acsn_.c_str(), available.c_str());
+    return false;
 }
 
 void HKCameraNode::openAndConfigure()
@@ -230,7 +311,8 @@ void HKCameraNode::openAndConfigure()
     MV_CC_SetFloatValue(handle_, "ExposureTime", static_cast<float>(exposure_us_));
     MV_CC_SetEnumValue(handle_, "GainAuto", MV_GAIN_MODE_OFF);
     MV_CC_SetFloatValue(handle_, "Gain", static_cast<float>(gain_db_));
-    MV_CC_SetEnumValue(handle_, "BalanceWhiteAuto", static_cast<unsigned int>(HKParams::balance_white_auto));
+    MV_CC_SetEnumValue(handle_, "BalanceWhiteAuto",
+                       static_cast<unsigned int>(balance_white_auto_));
 
     // 性能相关：最小 SDK 缓存 + 快速 Bayer 插值 + 只保留最新帧
     MV_CC_SetImageNodeNum(handle_, 1);
@@ -303,20 +385,23 @@ void HKCameraNode::captureLoop()
             continue;
         }
 
+        // COW（写时复制）：上一条消息还被人引用时，先独占一份再往里填。
+        // 进程内零拷贝（intra-process）下，订阅者拿到的是同一个 shared_ptr，
+        // 如果这里原地覆盖，对方读到的就是"写了一半"的图。
+        // 这里只复制元数据、不复制旧像素，代价很小。
+        if (!image_msg_.unique()) {
+            auto msg = std::make_shared<sensor_msgs::msg::Image>();
+            msg->header = image_msg_->header;
+            msg->width = image_msg_->width;
+            msg->height = image_msg_->height;
+            msg->encoding = image_msg_->encoding;
+            msg->is_bigendian = image_msg_->is_bigendian;
+            msg->step = image_msg_->step;
+            msg->data.resize(image_msg_->data.size());
+            image_msg_ = std::move(msg);
+        }
+
         if constexpr (kRotateImageCcw90) {
-            // COW：上一条消息仍被 QoS 历史/订阅者引用时，先独占一份再写入。
-            // 旋转会整帧覆盖像素，因此只复制元数据、不复制旧像素，省一次全帧 memcpy。
-            if (!image_msg_.unique()) {
-                auto msg = std::make_shared<sensor_msgs::msg::Image>();
-                msg->header = image_msg_->header;
-                msg->width = image_msg_->width;
-                msg->height = image_msg_->height;
-                msg->encoding = image_msg_->encoding;
-                msg->is_bigendian = image_msg_->is_bigendian;
-                msg->step = image_msg_->step;
-                msg->data.resize(image_msg_->data.size());
-                image_msg_ = std::move(msg);
-            }
             // 旋转是纯内存操作，放到 SDK 锁外执行，不阻塞取流与曝光设置
             const auto rotate_start = std::chrono::steady_clock::now();
             rotateBgr90Ccw(
@@ -362,6 +447,14 @@ void HKCameraNode::setExposureCallback(
     }
     response->success = true;
     response->message = "exposure updated";
+
+    // 改完立刻把生效值广播出去（draw 那边下一帧就能显示）
+    if (exposure_pub_) {
+        std_msgs::msg::Float64 msg;
+        msg.data = exposure_us_;
+        exposure_pub_->publish(msg);
+    }
+    RCLCPP_INFO(get_logger(), "曝光已改为 %.1f us", exposure_us_);
 }
 
 bool HKCameraNode::convertFrame(const MV_FRAME_OUT & out_frame)
@@ -407,8 +500,9 @@ bool HKCameraNode::convertFrame(const MV_FRAME_OUT & out_frame)
 
 void HKCameraNode::publishCompressed()
 {
-    // 压缩限频，避免每帧 JPEG 编码拖慢 160fps 采集循环；compressed_fps_ <= 0 时关闭
-    if (compressed_fps_ <= 0) {
+    // 压缩话题只给人看，按 compressed_fps_ 限频，避免每帧 JPEG 编码拖慢采集。
+    // 编码跑在独立线程，跟不上就覆盖旧帧，采集线程永远不阻塞。
+    if (compressed_fps_ <= 0 || !jpeg_thread_.joinable()) {
         return;
     }
     const int64_t now_ns = get_clock()->now().nanoseconds();
@@ -418,45 +512,74 @@ void HKCameraNode::publishCompressed()
     }
     last_compressed_ns_ = now_ns;
 
-    // 用 MVS SDK 自带编码器转 JPEG：同一进程内华睿 SDK 会抢占 OpenCV 的
-    // libjpeg 符号，cv::imencode 会崩在华睿的 libImageSave.so 里，故回避 OpenCV。
-    MV_SAVE_IMAGE_PARAM_EX3 param{};
-    param.pData = image_msg_->data.data();
-    param.nDataLen = static_cast<unsigned int>(image_msg_->data.size());
-    param.enPixelType = PixelType_Gvsp_BGR8_Packed;
-    param.nWidth = static_cast<unsigned int>(image_msg_->width);
-    param.nHeight = static_cast<unsigned int>(image_msg_->height);
-    param.pImageBuffer = jpeg_buffer_.data();
-    param.nBufferSize = static_cast<unsigned int>(jpeg_buffer_.size());
-    param.enImageType = MV_Image_Jpeg;
-    // MVS 要求质量范围 (50, 99]，越界会返回错误
-    param.nJpgQuality = static_cast<unsigned int>(
-        std::clamp(jpeg_quality_, 50, 99));
-
-    int encode_ret = MV_OK;
-    double encode_ms = 0.0;
+    // 只做一次 memcpy 把这一帧交给编码线程，采集线程立刻返回
     {
-        std::lock_guard<std::mutex> sdk_lock(sdk_mutex_);
-        const auto encode_start = std::chrono::steady_clock::now();
-        encode_ret = MV_CC_SaveImageEx3(handle_, &param);
-        encode_ms = std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - encode_start).count();
+        std::lock_guard<std::mutex> lock(jpeg_mutex_);
+        jpeg_src_.assign(image_msg_->data.begin(), image_msg_->data.end());
+        jpeg_header_ = image_msg_->header;
+        jpeg_width_ = image_msg_->width;
+        jpeg_height_ = image_msg_->height;
+        jpeg_step_ = image_msg_->step;
+        jpeg_pending_ = true;   // 覆盖掉还没编码的旧帧（跟不上就丢）
     }
-    if (encode_ms > 10.0) {
-        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
-            "slow MV_CC_SaveImageEx3: %.1f ms", encode_ms);
-    }
-    if (encode_ret != MV_OK) {
-        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
-                             "MV_CC_SaveImageEx3 failed: %s", hikError(encode_ret).c_str());
-        return;
-    }
+    jpeg_cv_.notify_one();
+}
 
-    sensor_msgs::msg::CompressedImage msg;
-    msg.header = image_msg_->header;  // 复用原始帧时间戳
-    msg.format = "jpeg";
-    msg.data.assign(jpeg_buffer_.begin(), jpeg_buffer_.begin() + param.nImageLen);
-    compressed_pub_->publish(msg);
+void HKCameraNode::jpegLoop()
+{
+    while (true) {
+        std::vector<uint8_t> src;
+        std_msgs::msg::Header header;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        uint32_t step = 0;
+        {
+            std::unique_lock<std::mutex> lock(jpeg_mutex_);
+            jpeg_cv_.wait(lock, [this] { return jpeg_stop_ || jpeg_pending_; });
+            if (jpeg_stop_) {
+                return;
+            }
+            src.swap(jpeg_src_);
+            header = jpeg_header_;
+            width = jpeg_width_;
+            height = jpeg_height_;
+            step = jpeg_step_;
+            jpeg_pending_ = false;
+        }
+        if (width == 0 || height == 0 || src.size() < static_cast<size_t>(step) * height) {
+            continue;
+        }
+
+        // 用 MVS SDK 自带编码器（和学长那版一致）：
+        // 比 cv::imencode 快，而且不需要额外的 OpenCV Mat 包装。
+        MV_SAVE_IMAGE_PARAM_EX3 param{};
+        param.pData = src.data();
+        param.nDataLen = static_cast<unsigned int>(src.size());
+        param.enPixelType = PixelType_Gvsp_BGR8_Packed;
+        param.nWidth = width;
+        param.nHeight = height;
+        param.pImageBuffer = jpeg_buffer_.data();
+        param.nBufferSize = static_cast<unsigned int>(jpeg_buffer_.size());
+        param.enImageType = MV_Image_Jpeg;
+        param.nJpgQuality = static_cast<unsigned int>(std::clamp(jpeg_quality_, 50, 99));
+
+        int encode_ret = MV_OK;
+        {
+            std::lock_guard<std::mutex> sdk_lock(sdk_mutex_);
+            encode_ret = MV_CC_SaveImageEx3(handle_, &param);
+        }
+        if (encode_ret != MV_OK) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                                 "MV_CC_SaveImageEx3 failed: %s", hikError(encode_ret).c_str());
+            continue;
+        }
+
+        sensor_msgs::msg::CompressedImage msg;
+        msg.header = header;
+        msg.format = "jpeg";
+        msg.data.assign(jpeg_buffer_.begin(), jpeg_buffer_.begin() + param.nImageLen);
+        compressed_pub_->publish(std::move(msg));
+    }
 }
 
 }  // namespace ros_camera

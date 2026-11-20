@@ -50,6 +50,13 @@ class SimWorld(Node):
             get_package_share_directory('dart_sim'), 'config', 'real_light_centers.yaml'))
         self.declare_parameter('camera_file', os.path.join(
             get_package_share_directory('dart_sim'), 'config', 'ost.yaml'))
+        # 第二台相机的内参；留空表示和第一台一样
+        self.declare_parameter('camera_file2', '')
+        # 话题名参数化：双相机时一个相机一条流
+        self.declare_parameter('image_topic', '/camera/image_raw')
+        self.declare_parameter('image_topic_2', '/camera2/image_raw')
+        self.declare_parameter('camera_info_topic', '/camera/camera_info')
+        self.declare_parameter('camera_info_topic_2', '/camera2/camera_info')
         self.declare_parameter('save', False)
         self.declare_parameter('save_dir', '')
         self.declare_parameter('time_scale', 1.0)
@@ -66,8 +73,14 @@ class SimWorld(Node):
         scene_file = str(self.get_parameter('scene_file').value)
         lights_file = str(self.get_parameter('lights_file').value)
         camera_file = str(self.get_parameter('camera_file').value)
+        camera_file2 = str(self.get_parameter('camera_file2').value or '') or None
         self.scene = Scene.from_yaml(scene_file, lights_file=lights_file,
-                                     camera_file=camera_file)
+                                     camera_file=camera_file,
+                                     camera_file2=camera_file2)
+        self.image_topic = str(self.get_parameter('image_topic').value)
+        self.image_topic_2 = str(self.get_parameter('image_topic_2').value)
+        self.info_topic = str(self.get_parameter('camera_info_topic').value)
+        self.info_topic_2 = str(self.get_parameter('camera_info_topic_2').value)
         self.time_scale = max(1e-3, float(self.get_parameter('time_scale').value))
         self.loop = bool(self.get_parameter('loop').value)
         self.draw_truth = bool(self.get_parameter('draw_truth').value)
@@ -82,8 +95,11 @@ class SimWorld(Node):
 
         # 和真实相机一致：图像用 SensorDataQoS（best effort, depth 5）。
         # 用 reliable + depth 10 时，大图在 loopback 上丢包会触发重传，反而把发布端拖死。
-        self.pub_image = self.create_publisher(Image, '/camera/image_raw', qos_profile_sensor_data)
-        self.pub_info = self.create_publisher(CameraInfo, '/camera/camera_info', 10)
+        self.pub_image = self.create_publisher(Image, self.image_topic, qos_profile_sensor_data)
+        self.pub_info = self.create_publisher(CameraInfo, self.info_topic, 10)
+        # 第二台相机（scene.yaml 里写了 camera2 才会有内容）
+        self.pub_image_2 = self.create_publisher(Image, self.image_topic_2, qos_profile_sensor_data)
+        self.pub_info_2 = self.create_publisher(CameraInfo, self.info_topic_2, 10)
         self.pub_dart = self.create_publisher(PointStamped, '/sim/truth/dart', 10)
         self.pub_velocity = self.create_publisher(Vector3Stamped, '/sim/truth/dart_velocity', 10)
         self.pub_dart_pixel = self.create_publisher(PointStamped, '/sim/truth/dart_pixel', 10)
@@ -121,8 +137,13 @@ class SimWorld(Node):
         self.get_logger().info(
             f'scene {self.scene.width}x{self.scene.height} @ {self.scene.fps:g} fps, '
             f'{n} frames, flight time {self.scene.t_end:.3f} s')
+        if self.scene.camera2 is not None:
+            self.get_logger().info(
+                f'双相机: cam1={self.image_topic}  cam2={self.image_topic_2}')
+        else:
+            self.get_logger().info(f'单相机: {self.image_topic}')
         self.get_logger().info(
-            'topics: /camera/image_raw /camera/camera_info /sim/truth/* /sim/status')
+            f'topics: {self.image_topic} {self.info_topic} /sim/truth/* /sim/status')
 
         period = 1.0 / (self.scene.fps * self.time_scale)
         self.timer = self.create_timer(period, self._tick)
@@ -141,6 +162,11 @@ class SimWorld(Node):
 
         self._publish_image(image, stamp)
         self._publish_camera_info(stamp)
+        if self.scene.camera2 is not None:
+            image2 = render_frame(self.scene, t, self.rng, draw_truth=self.draw_truth,
+                                  camera=self.scene.camera2)
+            self._publish_image(image2, stamp, which=2)
+            self._publish_camera_info(stamp, which=2)
 
         truth = self._groundtruth(t)
         self._publish_truth(truth, stamp)
@@ -165,10 +191,10 @@ class SimWorld(Node):
                     self._exit_timer = self.create_timer(0.2, self._request_exit)
 
     # --------------------------------------------------------------- publish
-    def _publish_image(self, rgb, stamp):
+    def _publish_image(self, rgb, stamp, which=1):
         message = Image()
         message.header.stamp = stamp
-        message.header.frame_id = 'camera'
+        message.header.frame_id = 'camera' if which == 1 else 'camera2'
         message.height = int(rgb.shape[0])
         message.width = int(rgb.shape[1])
         message.encoding = 'bgr8'
@@ -178,13 +204,15 @@ class SimWorld(Node):
         # every element in Python (~44 ms for 640x480x3).  Assigning an
         # ``array('B')`` is a memcpy fast path instead (~0.03 ms).
         message.data = array.array('B', rgb[:, :, ::-1].tobytes())
-        self.pub_image.publish(message)
+        (self.pub_image if which == 1 else self.pub_image_2).publish(message)
 
-    def _publish_camera_info(self, stamp):
-        camera = self.scene.camera
+    def _publish_camera_info(self, stamp, which=1):
+        camera = self.scene.camera if which == 1 else self.scene.camera2
+        if camera is None:
+            return
         message = CameraInfo()
         message.header.stamp = stamp
-        message.header.frame_id = 'camera'
+        message.header.frame_id = 'camera' if which == 1 else 'camera2'
         message.width = int(camera.width)
         message.height = int(camera.height)
         message.distortion_model = 'plumb_bob'
@@ -194,7 +222,7 @@ class SimWorld(Node):
         message.p = [float(camera.fx), 0.0, float(camera.cx), 0.0,
                      0.0, float(camera.fy), float(camera.cy), 0.0,
                      0.0, 0.0, 1.0, 0.0]
-        self.pub_info.publish(message)
+        (self.pub_info if which == 1 else self.pub_info_2).publish(message)
 
     def _groundtruth(self, t):
         camera = self.scene.camera
@@ -387,7 +415,8 @@ def main(args=None):
         except ImportError as exc:
             world.get_logger().warn(f'sim_viewer 不可用（已跳过）: {exc}')
         else:
-            viewer = add_extra(lambda: SimViewer(show_truth=world.show_truth))
+            viewer = add_extra(lambda: SimViewer(show_truth=world.show_truth,
+                                                 topic=world.image_topic))
 
     if world.eval_enabled:
         from dart_sim import sim_eval as sim_eval_module

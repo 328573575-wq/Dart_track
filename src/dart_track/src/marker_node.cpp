@@ -50,7 +50,7 @@ namespace dart_track
     MarkerNode::MarkerNode(const rclcpp::NodeOptions & options)
     : rclcpp::Node("marker_node", options)
     {
-        // 和 solvepose 用同一份参数文件（real_light_centers.yaml）
+        // 灯坐标由 launch 传进来（real_light_centers_1.yaml）
         const std::vector<std::string> point_names = {
             "point_0", "point_1", "point_2", "point_3"
         };

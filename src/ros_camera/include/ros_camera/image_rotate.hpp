@@ -1,6 +1,6 @@
 #pragma once
 
-// 发布前画面旋转内核:供各相机节点共用(hk_camera_node / iray_camera_node)。
+// 发布前画面旋转内核（hk_camera_node 使用）。
 // 只依赖标准库,不含任何 ROS 或相机 SDK 头,可安全被多个组件共用。
 
 #include <algorithm>

@@ -1,10 +1,17 @@
 #pragma once
+#include <chrono>
+#include <memory>
+
 #include <rclcpp/rclcpp.hpp>
 #include <opencv2/opencv.hpp>
 
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
+#include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/header.hpp>
 #include "dart_track_interfaces/msg/detections.hpp"
+#include "dart_track/draw_renderer.hpp"
+
 using Detections = dart_track_interfaces::msg::Detections;
 namespace dart_track 
 {
@@ -13,7 +20,12 @@ namespace dart_track
     {
     private:
         rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
+        rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr compressed_sub_;
+        rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr exposure_sub_;
+        double exposure_us_ = 0.0;   // 0 = 还没收到
         rclcpp::Publisher<Detections>::SharedPtr detections_pub_;
+        // 画好的图（识别 + 绘图在同一个回调里完成，没有额外一跳）
+        rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr draw_pub_;
 
         cv::Point2d dart_last_center_ = cv::Point2d(-1.0, -1.0);
         // 灯条是刚体，相邻两帧的"尾->头"方向不会突然转 180°。
@@ -39,15 +51,51 @@ namespace dart_track
         // 灯条长宽比
         double LENGTH_WIDTH_RATIO = 1.8;
 
+        // ===== 引导灯筛选（现实环境用）=====
+        // 灯是圆形的，长宽比超过这个值就不当灯。
+        // 但灯在地面上，倒影会和灯连成竖向长条，所以放到 6 是安全的
+        double LIGHT_MAX_ASPECT = 6.0;
+        // 自适应亮度门限：以画面里最亮的绿色像素为基准取这个比例。
+        // 现实场景整体偏暗、灯却有饱和亮芯，相对阈值比固定阈值稳得多
+        double LIGHT_V_AUTO_RATIO = 0.8;
+        // 邻近候选合并半径：一个灯常被切成"灯芯 + 倒影"两段，合并回一个
+        double LIGHT_CLUSTER_RADIUS_PX = 50.0;
+
+        // 复用的中间缓冲：每帧 cvtColor/inRange 都重新分配 1.5MB 太浪费
+        cv::Mat hsv_buf_;
+        cv::Mat light_mask_buf_;
+        cv::Mat dart_mask_buf_;
+
+        // ===== 绘图 =====
+        std::unique_ptr<DrawRenderer> renderer_;
+        double DRAW_SCALE = 0.5;
+        double DRAW_FPS = 30.0;              // 绘图发帖帧率：给人看的，不必跟满 160
+        int64_t last_draw_ns_ = 0;
+        bool DRAW_ENABLE = true;
+        uint64_t cam_count_ = 0;      // 收到的帧数
+        uint64_t draw_count_ = 0;     // 画出去的帧数
+        double cam_fps_ = 0.0;
+        double draw_fps_ = 0.0;
+        std::chrono::steady_clock::time_point fps_window_start_{};
+
+
 
     private:
         void recognition_callback(const sensor_msgs::msg::Image::ConstSharedPtr& img_msg);
+        void compressed_callback(const sensor_msgs::msg::CompressedImage::ConstSharedPtr& msg);
+        // 真正干活的地方：拿到一帧 BGR 图和它的时间戳
+        void process_frame(const cv::Mat& frame, const std_msgs::msg::Header& header);
         void detections_publish
         (
             const std_msgs::msg::Header & header,
-            std::vector<cv::Point2d>& light_centers, 
+            const cv::Mat& frame,
+            std::vector<cv::Point2d>& light_centers,
             cv::Point2d& dart_front_mid,
             cv::Point2d& dart_back_mid);
+        // 把这一帧画出来并发到 draw 话题
+        void draw_publish(const std_msgs::msg::Header& header, const cv::Mat& frame,
+                          const Detections& det);
+        void refresh_fps();
     public:
         explicit RecognitionNode(const rclcpp::NodeOptions & options);
     };

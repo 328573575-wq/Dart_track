@@ -120,9 +120,12 @@ def draw_ring(img, cx, cy, radius, color=(0, 255, 0), thickness=1):
 # ---------------------------------------------------------------------------
 # frame rendering
 # ---------------------------------------------------------------------------
-def render_frame(scene, t, rng, draw_truth=False):
-    """Render one synthetic BGR-agnostic RGB frame at time ``t`` (seconds)."""
-    cam = scene.camera
+def render_frame(scene, t, rng, draw_truth=False, camera=None):
+    """Render one synthetic RGB frame at time ``t`` for one camera.
+
+    ``camera`` 默认是第一台；传 ``scene.camera2`` 就渲染第二台。
+    """
+    cam = camera if camera is not None else scene.camera
     height, width = cam.height, cam.width
     img = np.full((height, width, 3), scene.background, dtype=np.float32)
     img += rng.normal(0.0, scene.noise_sigma, (height, width, 1)).astype(np.float32)

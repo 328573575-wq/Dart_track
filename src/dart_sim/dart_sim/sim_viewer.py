@@ -25,7 +25,7 @@ except ImportError:  # pragma: no cover - depends on the machine
 
 
 class SimViewer(Node):
-    def __init__(self, show_truth=None):
+    def __init__(self, show_truth=None, topic='/camera/image_raw'):
         super().__init__('sim_viewer')
         self.declare_parameter('window', 'dart_sim')
         self.declare_parameter('show_truth', True)
@@ -47,7 +47,7 @@ class SimViewer(Node):
             self.get_logger().info('viewer ready; press q in the image window to quit')
 
         # 和相机发布端一致：best effort。用默认的 reliable 会收不到图（QoS 不兼容）
-        self.create_subscription(Image, '/camera/image_raw', self._on_image,
+        self.create_subscription(Image, topic, self._on_image,
                                  qos_profile_sensor_data)
         self.create_subscription(Float64MultiArray, '/sim/truth/light_pixels',
                                  self._on_lights, 10)

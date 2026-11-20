@@ -3,7 +3,7 @@
 <package format="3">
   <name>ros_camera</name>
   <version>0.1.0</version>
-  <description>Selectable Hikvision HK and IRay camera ROS2 components.</description>
+  <description>Hikvision HK camera ROS2 component.</description>
   <maintainer email="dart@example.com">dart</maintainer>
   <license>MIT</license>
 
@@ -14,7 +14,6 @@
   <depend>sensor_msgs</depend>
   <depend>cv_bridge</depend>
   <depend>OpenCV</depend>
-  <depend>params_control</depend>
   <depend>dart_interfaces</depend>
 
   <export>

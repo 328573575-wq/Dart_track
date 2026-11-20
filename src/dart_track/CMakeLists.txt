@@ -27,7 +27,7 @@ find_package(visualization_msgs REQUIRED)
 
 add_library(dart_track_component SHARED
   src/recognition_node.cpp
-  src/draw_screen_node.cpp
+  src/draw_renderer.cpp
   src/solvepose_node.cpp
   src/position_node.cpp
   src/marker_node.cpp
@@ -59,7 +59,6 @@ target_include_directories(dart_track_component PRIVATE ${OpenCV_INCLUDE_DIRS})
 
 rclcpp_components_register_nodes(dart_track_component
   "dart_track::RecognitionNode"
-  "dart_track::DrawScreenNode"
   "dart_track::SolvePoseNode"
   "dart_track::PositionNode"
   "dart_track::MarkerNode"

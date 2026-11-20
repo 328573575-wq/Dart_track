@@ -31,6 +31,7 @@ def generate_launch_description():
     scene_file = LaunchConfiguration('scene_file')
     lights_file = LaunchConfiguration('lights_file')
     camera_file = LaunchConfiguration('camera_file')
+    camera_file2 = LaunchConfiguration('camera_file2')
     save = LaunchConfiguration('save')
     gui = LaunchConfiguration('gui')
     show_truth = LaunchConfiguration('show_truth')
@@ -38,6 +39,8 @@ def generate_launch_description():
     time_scale = LaunchConfiguration('time_scale')
     loop = LaunchConfiguration('loop')
     draw_truth = LaunchConfiguration('draw_truth')
+    image_topic = LaunchConfiguration('image_topic')
+    image_topic_2 = LaunchConfiguration('image_topic_2')
 
     # 只起一个进程：图像、真值、窗口、打分都在 sim_world 里
     sim_world = Node(
@@ -49,6 +52,7 @@ def generate_launch_description():
             'scene_file': scene_file,
             'lights_file': lights_file,
             'camera_file': camera_file,
+            'camera_file2': camera_file2,
             'save': ParameterValue(save, value_type=bool),
             'viewer': ParameterValue(gui, value_type=bool),
             'show_truth': ParameterValue(show_truth, value_type=bool),
@@ -56,6 +60,8 @@ def generate_launch_description():
             'time_scale': ParameterValue(time_scale, value_type=float),
             'loop': ParameterValue(loop, value_type=bool),
             'draw_truth': ParameterValue(draw_truth, value_type=bool),
+            'image_topic': image_topic,
+            'image_topic_2': image_topic_2,
         }],
     )
 
@@ -66,7 +72,9 @@ def generate_launch_description():
                               description='guide light coordinates (same format as '
                                           'dart_track/config/real_light_centers.yaml)'),
         DeclareLaunchArgument('camera_file', default_value=default_camera,
-                              description='camera intrinsics (ost.yaml format)'),
+                              description='1 号相机内参（ost.yaml 格式）'),
+        DeclareLaunchArgument('camera_file2', default_value='',
+                              description='2 号相机内参；留空表示和 1 号相同'),
         DeclareLaunchArgument('save', default_value='false',
                               description='save PNG frames + truth to runs/<timestamp>'),
         DeclareLaunchArgument('gui', default_value='true',
@@ -82,5 +90,9 @@ def generate_launch_description():
                               description='restart the flight when it ends'),
         DeclareLaunchArgument('draw_truth', default_value='false',
                               description='draw green truth rings into the saved images'),
+        DeclareLaunchArgument('image_topic', default_value='/cam1/image_raw',
+                              description='1 号相机图像话题（要和 dart_track 的 pipelines 对齐）'),
+        DeclareLaunchArgument('image_topic_2', default_value='/cam2/image_raw',
+                              description='2 号相机图像话题'),
         sim_world,
     ])

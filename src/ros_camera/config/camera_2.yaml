@@ -1,0 +1,17 @@
+# 2 号相机
+/**:
+  ros__parameters:
+    camera_acsn: "DA0498835"            # ← 这台相机的序列号
+    width: 1440
+    height: 1080
+    fps: 160.0
+    exposure_us: 250.0
+    gain: 0.0
+    balance_white_auto: 0      # 0=关 1=连续 2=一次
+    frame_id: camera2
+    image_topic: /cam2/image_raw
+    compressed_topic: /cam2/compressed
+    exposure_service: /cam2/set_exposure
+    exposure_topic: /cam2/exposure   # 当前曝光值（draw 显示用）
+    compressed_fps: 30         # 压缩话题帧率（给人看的，0=关闭）
+    jpeg_quality: 80

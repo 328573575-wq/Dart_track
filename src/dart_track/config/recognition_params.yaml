@@ -1,24 +1,28 @@
 /**:
   ros__parameters:
-    # 引导灯 HSV 阈值
+    # ===== 引导灯 =====
     light_h_lo: 40
     light_h_hi: 85
-    light_s_lo: 50
+    light_s_lo: 70
     light_s_hi: 255
-    light_v_lo: 50
+    # 亮度下限是"地板值"：实际阈值 = max(它, light_v_auto_ratio × 画面最亮绿像素)
+    light_v_lo: 120
     light_v_hi: 255
+    # 实际亮度阈值 = max(light_v_lo, 这个比例 × 画面最亮的绿色像素)
+    # 灯芯是饱和的，取 0.5 能滤掉大部分暗的东西；画面本来就暗时可以再降
+    light_v_auto_ratio: 0.8
+    # 面积下限：远处的小灯只有几十像素，别设太大
+    light_min_area: 15.0
+    # 长宽比上限：灯是圆的，细长的多半是反光/器件边缘
+    light_max_aspect: 6.0
 
-    # 飞镖灯条 HSV 阈值
-    dart_h_lo: 40
-    dart_h_hi: 85
+    # ===== 飞镖灯条 =====
+    dart_h_lo: 110
+    dart_h_hi: 130
     dart_s_lo: 80
     dart_s_hi: 255
     dart_v_lo: 100
     dart_v_hi: 255
-
-    # 最小面积
-    light_min_area: 130.0
     dart_min_area: 40.0
-
-    # 灯条长宽比
-    length_width_ratio: 1.8
+    # 灯条是细长的：长宽比小于这个值的不当灯条
+    length_width_ratio: 2.2
